@@ -25,16 +25,12 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
     address owner;
   }
 
-  struct Stats {
-    uint64 blockNum;
-    uint16 numWizardsStaked;
-    uint16 numDragonsStaked;
-    uint16 totalRankStaked;
-  }
+  uint256 private totalRankStaked;
+  uint256 private numWizardsStaked;
 
-  event TokenStaked(address indexed owner, uint256 indexed tokenId, uint256 value);
-  event WizardClaimed(uint256 indexed tokenId, uint256 earned, bool unstaked);
-  event DragonClaimed(uint256 indexed tokenId, uint256 earned, bool unstaked);
+  event TokenStaked(address indexed owner, uint256 indexed tokenId, bool indexed isWizard, uint256 value);
+  event WizardClaimed(uint256 indexed tokenId, bool indexed unstaked, uint256 earned);
+  event DragonClaimed(uint256 indexed tokenId, bool indexed unstaked, uint256 earned);
 
   // reference to the WnD NFT contract
   IWnD public wndNFT;
@@ -70,7 +66,6 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
   uint256 public totalGPEarned;
   // the last time $GP was claimed
   uint256 private lastClaimTimestamp;
-  Stats private stats;
 
   // emergency rescue to allow unstaking without any checks but without $GP
   bool public rescueEnabled = false;
@@ -100,11 +95,6 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
     treasureChestTypeId = typeId;
   }
 
-  function getStats() external view returns (Stats memory) {
-    require(stats.blockNum < block.number, "hmmmm what doing?");
-    return stats;
-  }
-
   /** STAKING */
 
   /**
@@ -115,7 +105,6 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
   function addManyToTowerAndFlight(address account, uint16[] calldata tokenIds) external override nonReentrant {
     require(tx.origin == _msgSender() || _msgSender() == address(wndGame), "Only EOA");
     require(account == tx.origin, "account to sender mismatch");
-    stats.blockNum = uint64(block.number);
     for (uint i = 0; i < tokenIds.length; i++) {
       if (_msgSender() != address(wndGame)) { // dont do this step if its a mint + stake
         require(wndNFT.ownerOf(tokenIds[i]) == _msgSender(), "You don't own this token");
@@ -142,8 +131,8 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
       tokenId: uint16(tokenId),
       value: uint80(block.timestamp)
     });
-    stats.numWizardsStaked += 1;
-    emit TokenStaked(account, tokenId, block.timestamp);
+    numWizardsStaked += 1;
+    emit TokenStaked(account, tokenId, true, block.timestamp);
   }
 
   /**
@@ -153,15 +142,14 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
    */
   function _addDragonToFlight(address account, uint256 tokenId) internal {
     uint8 rank = _rankForDragon(tokenId);
-    stats.totalRankStaked += rank; // Portion of earnings ranges from 8 to 5
+    totalRankStaked += rank; // Portion of earnings ranges from 8 to 5
     flightIndices[tokenId] = flight[rank].length; // Store the location of the dragon in the Flight
     flight[rank].push(Stake({
       owner: account,
       tokenId: uint16(tokenId),
       value: uint80(gpPerRank)
     })); // Add the dragon to the Flight
-    stats.numDragonsStaked += 1;
-    emit TokenStaked(account, tokenId, gpPerRank);
+    emit TokenStaked(account, tokenId, false, gpPerRank);
   }
 
   /** CLAIMING / UNSTAKING */
@@ -174,7 +162,6 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
    */
   function claimManyFromTowerAndFlight(uint16[] calldata tokenIds, bool unstake) external whenNotPaused _updateEarnings nonReentrant {
     require(tx.origin == _msgSender() || _msgSender() == address(wndGame), "Only EOA");
-    stats.blockNum = uint64(block.number);
     uint256 owed = 0;
     for (uint i = 0; i < tokenIds.length; i++) {
       if (wndNFT.isWizard(tokenIds[i])) {
@@ -216,7 +203,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
         owed = 0;
       }
       delete tower[tokenId];
-      stats.numWizardsStaked -= 1;
+      numWizardsStaked -= 1;
       // Always transfer last to guard against reentrance
       wndNFT.safeTransferFrom(address(this), _msgSender(), tokenId, ""); // send back Wizard
     } else {
@@ -228,7 +215,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
         value: uint80(block.timestamp)
       }); // reset stake
     }
-    emit WizardClaimed(tokenId, owed, unstake);
+    emit WizardClaimed(tokenId, unstake, owed);
   }
 
   /**
@@ -245,8 +232,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
     require(stake.owner == _msgSender(), "Doesn't own token");
     owed = (rank) * (gpPerRank - stake.value); // Calculate portion of tokens based on Rank
     if (unstake) {
-      stats.totalRankStaked -= rank; // Remove rank from total staked
-      stats.numDragonsStaked -= 1;
+      totalRankStaked -= rank; // Remove rank from total staked
       Stake memory lastStake = flight[rank][flight[rank].length - 1];
       flight[rank][flightIndices[tokenId]] = lastStake; // Shuffle last Dragon to current position
       flightIndices[lastStake.tokenId] = flightIndices[tokenId];
@@ -261,7 +247,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
         value: uint80(gpPerRank)
       }); // reset stake
     }
-    emit DragonClaimed(tokenId, owed, unstake);
+    emit DragonClaimed(tokenId, unstake, owed);
   }
   /**
    * emergency unstake tokens
@@ -279,22 +265,21 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
         stake = tower[tokenId];
         require(stake.owner == _msgSender(), "SWIPER, NO SWIPING");
         delete tower[tokenId];
-        stats.numWizardsStaked -= 1;
+        numWizardsStaked -= 1;
         wndNFT.safeTransferFrom(address(this), _msgSender(), tokenId, ""); // send back Wizards
-        emit WizardClaimed(tokenId, 0, true);
+        emit WizardClaimed(tokenId, true, 0);
       } else {
         rank = _rankForDragon(tokenId);
         stake = flight[rank][flightIndices[tokenId]];
         require(stake.owner == _msgSender(), "SWIPER, NO SWIPING");
-        stats.totalRankStaked -= rank; // Remove Rank from total staked
-        stats.numDragonsStaked -= 1;
+        totalRankStaked -= rank; // Remove Rank from total staked
         lastStake = flight[rank][flight[rank].length - 1];
         flight[rank][flightIndices[tokenId]] = lastStake; // Shuffle last Dragon to current position
         flightIndices[lastStake.tokenId] = flightIndices[tokenId];
         flight[rank].pop(); // Remove duplicate
         delete flightIndices[tokenId]; // Delete old mapping
         wndNFT.safeTransferFrom(address(this), _msgSender(), tokenId, ""); // Send back Dragon
-        emit DragonClaimed(tokenId, 0, true);
+        emit DragonClaimed(tokenId, true, 0);
       }
     }
   }
@@ -306,12 +291,12 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
    * @param amount $GP to add to the pot
    */
   function _payDragonTax(uint256 amount) internal {
-    if (stats.totalRankStaked == 0) { // if there's no staked dragons
+    if (totalRankStaked == 0) { // if there's no staked dragons
       unaccountedRewards += amount; // keep track of $GP due to dragons
       return;
     }
     // makes sure to include any unaccounted $GP 
-    gpPerRank += (amount + unaccountedRewards) / stats.totalRankStaked;
+    gpPerRank += (amount + unaccountedRewards) / totalRankStaked;
     unaccountedRewards = 0;
   }
 
@@ -322,7 +307,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
     if (totalGPEarned < MAXIMUM_GLOBAL_GP) {
       totalGPEarned += 
         (block.timestamp - lastClaimTimestamp)
-        * stats.numWizardsStaked
+        * numWizardsStaked
         * DAILY_GP_RATE / 1 days; 
       lastClaimTimestamp = block.timestamp;
     }
@@ -365,10 +350,10 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
    * @return the owner of the randomly selected Dragon thief
    */
   function randomDragonOwner(uint256 seed) external view override returns (address) {
-    if (stats.totalRankStaked == 0) {
+    if (totalRankStaked == 0) {
       return address(0x0);
     }
-    uint256 bucket = (seed & 0xFFFFFFFF) % stats.totalRankStaked; // choose a value from 0 to total rank staked
+    uint256 bucket = (seed & 0xFFFFFFFF) % totalRankStaked; // choose a value from 0 to total rank staked
     uint256 cumulative;
     seed >>= 32;
     // loop through each bucket of Dragons with the same rank score

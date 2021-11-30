@@ -17,10 +17,12 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
         uint64 blockNum;
     }
 
-    struct WriteLockedValue {
-        uint64 blockNum;
-        uint16 value;
-    }
+    event WizardMinted(uint256 indexed tokenId);
+    event DragonMinted(uint256 indexed tokenId);
+    event WizardStolen(uint256 indexed tokenId);
+    event DragonStolen(uint256 indexed tokenId);
+    event WizardBurned(uint256 indexed tokenId);
+    event DragonBurned(uint256 indexed tokenId);
 
     // max number of tokens that can be minted: 60000 in production
     uint256 public maxTokens;
@@ -28,12 +30,6 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
     uint256 public PAID_TOKENS;
     // number of tokens have been minted so far
     uint16 public override minted;
-    WriteLockedValue private numWizards;
-    WriteLockedValue private numDragons;
-    WriteLockedValue private numWizardsStolen;
-    WriteLockedValue private numDragonsStolen;
-    WriteLockedValue private numWizardsBurned;
-    WriteLockedValue private numDragonsBurned;
 
     // mapping from tokenId to a struct containing the token's traits
     mapping(uint256 => WizardDragon) private tokenTraits;
@@ -123,7 +119,7 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
         rarities[16] = [255];
         aliases[16] = [0];
         // rankIndex
-        rarities[17] = [14, 155, 80, 255]; 
+        rarities[17] = [14, 155, 80, 255];
         aliases[17] = [2, 3, 3, 3];
     }
 
@@ -140,12 +136,6 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
         _;
     }
 
-    modifier blockIfValueChanging(WriteLockedValue memory wlv) {
-        // frens can always call whenever they want :)
-        require(admins[_msgSender()] || wlv.blockNum < block.number, "hmmmm what doing?");
-        _;
-    }
-
     modifier blockIfChangingToken(uint256 tokenId) {
         // frens can always call whenever they want :)
         require(admins[_msgSender()] || lastWriteToken[tokenId].blockNum < block.number, "hmmmm what doing?");
@@ -159,25 +149,6 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
     }
 
     /** EXTERNAL */
-
-    function getNumWizards() external view blockIfChangingAddress blockIfValueChanging(numWizards) returns (uint16) {
-        return numWizards.value;
-    }
-    function getNumWizardsStolen() external view blockIfChangingAddress blockIfValueChanging(numWizardsStolen) returns (uint16) {
-        return numWizardsStolen.value;
-    }
-    function getNumDragons() external view blockIfChangingAddress blockIfValueChanging(numDragons) returns (uint16) {
-        return numDragons.value;
-    }
-    function getNumDragonsStolen() external view blockIfChangingAddress blockIfValueChanging(numDragonsStolen) returns (uint16) {
-        return numDragonsStolen.value;
-    }
-    function getNumWizardsBurned() external view blockIfChangingAddress blockIfValueChanging(numWizardsBurned) returns (uint16) {
-        return numWizardsBurned.value;
-    }
-    function getNumDragonsBurned() external view blockIfChangingAddress blockIfValueChanging(numDragonsBurned) returns (uint16) {
-        return numDragonsBurned.value;
-    }
 
     function getTokenWriteBlock(uint256 tokenId) external view override returns(uint64) {
         require(admins[_msgSender()], "Only admins can call this");
@@ -196,10 +167,10 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
         if(tx.origin != recipient && recipient != address(tower)) {
             // Stolen!
             if(tokenTraits[minted].isWizard) {
-                numWizardsStolen = WriteLockedValue(uint64(block.number), numWizardsStolen.value + 1);
+                emit WizardStolen(minted);
             }
             else {
-                numDragonsStolen = WriteLockedValue(uint64(block.number), numDragonsStolen.value + 1);
+                emit DragonStolen(minted);
             }
         }
         _safeMint(recipient, minted);
@@ -211,11 +182,11 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
     function burn(uint256 tokenId) external override whenNotPaused {
         require(admins[_msgSender()], "Only admins can call this");
         require(ownerOf(tokenId) == tx.origin, "Oops you don't own that");
-        if(tokenTraits[minted].isWizard) {
-            numWizardsBurned = WriteLockedValue(uint64(block.number), numWizardsBurned.value + 1);
+        if(tokenTraits[tokenId].isWizard) {
+            emit WizardBurned(tokenId);
         }
         else {
-            numDragonsBurned = WriteLockedValue(uint64(block.number), numDragonsBurned.value + 1);
+            emit DragonBurned(tokenId);
         }
         _burn(tokenId);
     }
@@ -256,10 +227,10 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
             tokenTraits[tokenId] = t;
             existingCombinations[structToHash(t)] = tokenId;
             if(t.isWizard) {
-                numWizards = WriteLockedValue(uint64(block.number), numWizards.value + 1);
+                emit WizardMinted(tokenId);
             }
             else {
-                numDragons = WriteLockedValue(uint64(block.number), numDragons.value + 1);
+                emit DragonMinted(tokenId);
             }
             return t;
         }
@@ -338,7 +309,7 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
     * @param tokenId the ID of the token to check
     * @return wizard - whether or not a token is a Wizards
     */
-    function isWizard(uint256 tokenId) external view blockIfChangingToken(tokenId) returns (bool) {
+    function isWizard(uint256 tokenId) external view override blockIfChangingToken(tokenId) returns (bool) {
         // Sneaky dragons will be slain if they try to peep this after mint. Nice try.
         IWnD.WizardDragon memory s = tokenTraits[tokenId];
         return s.isWizard;
