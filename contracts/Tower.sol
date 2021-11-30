@@ -124,7 +124,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
         continue; // there may be gaps in the array for stolen tokens
       }
 
-      if (isWizard(tokenIds[i])) 
+      if (wndNFT.isWizard(tokenIds[i])) 
         _addWizardToTower(account, tokenIds[i]);
       else 
         _addDragonToFlight(account, tokenIds[i]);
@@ -177,7 +177,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
     stats.blockNum = uint64(block.number);
     uint256 owed = 0;
     for (uint i = 0; i < tokenIds.length; i++) {
-      if (isWizard(tokenIds[i])) {
+      if (wndNFT.isWizard(tokenIds[i])) {
         owed += _claimWizardFromTower(tokenIds[i], unstake);
       }
       else {
@@ -275,7 +275,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
     uint8 rank;
     for (uint i = 0; i < tokenIds.length; i++) {
       tokenId = tokenIds[i];
-      if (isWizard(tokenId)) {
+      if (wndNFT.isWizard(tokenId)) {
         stake = tower[tokenId];
         require(stake.owner == _msgSender(), "SWIPER, NO SWIPING");
         delete tower[tokenId];
@@ -348,17 +348,6 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
   }
 
   /** READ ONLY */
-
-  /**
-   * checks if a token is a Wizards
-   * @param tokenId the ID of the token to check
-   * @return wizard - whether or not a token is a Wizards
-   */
-  function isWizard(uint256 tokenId) public view returns (bool) {
-    // Sneaky dragons will be slain if they try to peep this after mint. Nice try.
-    IWnD.WizardDragon memory s = wndNFT.getTokenTraits(tokenId);
-    return s.isWizard;
-  }
 
   /**
    * gets the rank score for a Dragon

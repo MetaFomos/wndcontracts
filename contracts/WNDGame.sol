@@ -99,7 +99,6 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
     uint256 paidTokens = wndNFT.getPaidTokens();
     require(minted + amount <= maxTokens, "All tokens minted");
     require(amount > 0 && amount <= 10, "Invalid mint amount");
-
     if (minted < paidTokens) {
       require(minted + amount <= paidTokens, "All tokens on-sale already sold");
       if(hasPublicSaleStarted) {
@@ -225,6 +224,7 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
   function sacrifice(uint256 tokenId, uint256 gpAmt) external whenNotPaused nonReentrant {
     require(tx.origin == _msgSender(), "Only EOA");
     uint64 lastTokenWrite = wndNFT.getTokenWriteBlock(tokenId);
+    // Must check this, as getTokenTraits will be allowed since this contract is an admin
     require(lastTokenWrite < block.number, "hmmmm what doing?");
     IWnD.WizardDragon memory nft = wndNFT.getTokenTraits(tokenId);
     uint16 minted = wndNFT.minted();

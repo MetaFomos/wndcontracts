@@ -333,6 +333,17 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
 
     /** READ */
 
+    /**
+    * checks if a token is a Wizards
+    * @param tokenId the ID of the token to check
+    * @return wizard - whether or not a token is a Wizards
+    */
+    function isWizard(uint256 tokenId) external view blockIfChangingToken(tokenId) returns (bool) {
+        // Sneaky dragons will be slain if they try to peep this after mint. Nice try.
+        IWnD.WizardDragon memory s = tokenTraits[tokenId];
+        return s.isWizard;
+    }
+
     function getMaxTokens() external view override returns (uint256) {
         return maxTokens;
     }

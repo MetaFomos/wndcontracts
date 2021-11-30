@@ -28,5 +28,6 @@ interface IWnD is IERC721Enumerable {
     function getPaidTokens() external view returns (uint256);
     function getTokenTraits(uint256 tokenId) external view returns (WizardDragon memory);
     function getTokenWriteBlock(uint256 tokenId) external view returns(uint64);
+    function isWizard(uint256 tokenId) external view returns(bool);
   
 }
