@@ -11,12 +11,12 @@ import "./interfaces/ITraits.sol";
 import "./interfaces/IGP.sol";
 import "./interfaces/IWnD.sol";
 import "./interfaces/ISacrificialAlter.sol";
-import "./interfaces/IRandomer.sol";
+import "./interfaces/IRandomizer.sol";
 
 
 contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
 
-  IRandomer public randomer; 
+  IRandomizer public randomizer; 
 
   struct LastWrite {
     uint64 time;
@@ -69,26 +69,23 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
   modifier requireContractsSet() {
       require(address(gpToken) != address(0) && address(traits) != address(0) 
         && address(wndNFT) != address(0) && address(tower) != address(0) && address(alter) != address(0)
+         && address(randomizer) != address(0)
         , "Contracts not set");
       _;
   }
 
-  function setContracts(address _gp, address _traits, address _wnd, address _tower, address _alter) external onlyOwner {
+  function setContracts(address _gp, address _traits, address _wnd, address _tower, address _alter, address _rand) external onlyOwner {
     gpToken = IGP(_gp);
     traits = ITraits(_traits);
     wndNFT = IWnD(_wnd);
     tower = ITower(_tower);
     alter = ISacrificialAlter(_alter);
+    randomizer = IRandomizer(_rand);
   }
 
   function setTreasureChestId(uint256 typeId) external onlyOwner {
     treasureChestTypeId = typeId;
   }
-
-  function setRandomer(address addr) external onlyOwner {
-    randomer = IRandomer(addr);
-  }
-
   /** EXTERNAL */
 
   /** 
@@ -125,7 +122,7 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
     uint256 seed = 0;
     for (uint i = 0; i < amount; i++) {
       minted++;
-      seed = random(seed, lw.time, lw.blockNum);
+      seed = randomizer.random();
       address recipient = selectRecipient(seed, minted, paidTokens);
       if(recipient != _msgSender() && alter.balanceOf(_msgSender(), treasureChestTypeId) > 0) {
         // If the mint is going to be stolen, there's a 50% chance 
@@ -266,20 +263,6 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
     address thief = tower.randomDragonOwner(seed >> 144); // 144 bits reserved for trait selection
     if (thief == address(0x0)) return _msgSender();
     return thief;
-  }
-
-  /**
-   * generates a pseudorandom number. Uses point in time randomization to prevent abuse.
-   * @param seed a value ensure different outcomes for different sources in the same block
-   * @return a pseudorandom value
-   */
-  function random(uint256 seed, uint64 timestamp, uint64 blockNumber) internal view returns (uint256) {
-    return uint256(keccak256(abi.encodePacked(
-      tx.origin,
-      blockhash(blockNumber == 0 ? 0 : blockNumber - 1),
-      timestamp,
-      seed
-    )));
   }
 
   /** ADMIN */

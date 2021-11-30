@@ -8,7 +8,7 @@ import "./interfaces/IWnD.sol";
 import "./interfaces/ITower.sol";
 import "./interfaces/ITraits.sol";
 import "./interfaces/IGP.sol";
-import "./interfaces/IRandomer.sol";
+import "./interfaces/IRandomizer.sol";
 
 contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
 
@@ -56,8 +56,8 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
     ITower public tower;
     // reference to Traits
     ITraits public traits;
-    // reference to Randomer
-    IRandomer public randomer;
+    // reference to Randomizer
+    IRandomizer public randomizer;
 
     // address => allowedToCallFunctions
     mapping(address => bool) private admins;
@@ -130,7 +130,7 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
     /** CRITICAL TO SETUP / MODIFIERS */
 
     modifier requireContractsSet() {
-        require(address(traits) != address(0) && address(tower) != address(0), "Contracts not set");
+        require(address(traits) != address(0) && address(tower) != address(0) && address(randomizer) != address(0), "Contracts not set");
         _;
     }
 
@@ -152,9 +152,10 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
         _;
     }
 
-    function setContracts(address _traits, address _tower) external onlyOwner {
+    function setContracts(address _traits, address _tower, address _rand) external onlyOwner {
         traits = ITraits(_traits);
         tower = ITower(_tower);
+        randomizer = IRandomizer(_rand);
     }
 
     /** EXTERNAL */
@@ -262,7 +263,7 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
             }
             return t;
         }
-        return generate(tokenId, random(seed, lw.time, lw.blockNum), lw);
+        return generate(tokenId, randomizer.random(), lw);
     }
 
     /**
@@ -330,18 +331,6 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
         ));
     }
 
-    /**
-    * generates a pseudorandom number for picking traits. Uses point in time randomization to prevent abuse.
-    */
-    function random(uint256 seed, uint64 timestamp, uint64 blockNumber) internal view returns (uint256) {
-        return uint256(keccak256(abi.encodePacked(
-            tx.origin,
-            blockhash(blockNumber > 1 ? blockNumber - 2 : blockNumber),// Different block than WnDGame to ensure if needing to re-randomize that it goes down a different path
-            timestamp,
-            seed
-        )));
-    }
-
     /** READ */
 
     function getMaxTokens() external view override returns (uint256) {
@@ -383,14 +372,6 @@ contract WnD is IWnD, ERC721Enumerable, Ownable, Pausable {
     */
     function removeAdmin(address addr) external onlyOwner {
         admins[addr] = false;
-    }
-
-    /**
-    * enables owner to change the randomness provider
-    * @param addr the randomness provider address
-    */
-    function setRandomer(address addr) external onlyOwner {
-        randomer = IRandomer(addr);
     }
 
     /** Traits */

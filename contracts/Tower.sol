@@ -11,7 +11,7 @@ import "./interfaces/IWnD.sol";
 import "./interfaces/IGP.sol";
 import "./interfaces/ITower.sol";
 import "./interfaces/ISacrificialAlter.sol";
-import "./interfaces/IRandomer.sol";
+import "./interfaces/IRandomizer.sol";
 
 contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
   
@@ -42,8 +42,8 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
   IWnDGame public wndGame;
   // reference to the $GP contract for minting $GP earnings
   IGP public gpToken;
-  // reference to Randomer 
-  IRandomer public randomer;
+  // reference to Randomizer 
+  IRandomizer public randomizer;
 
   // maps tokenId to stake
   mapping(uint256 => Stake) private tower; 
@@ -85,22 +85,19 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
 
   modifier requireContractsSet() {
       require(address(wndNFT) != address(0) && address(gpToken) != address(0) 
-        && address(wndGame) != address(0), "Contracts not set");
+        && address(wndGame) != address(0) && address(randomizer) != address(0), "Contracts not set");
       _;
   }
 
-  function setContracts(address _wndNFT, address _gp, address _wndGame) external onlyOwner {
+  function setContracts(address _wndNFT, address _gp, address _wndGame, address _rand) external onlyOwner {
     wndNFT = IWnD(_wndNFT);
     gpToken = IGP(_gp);
     wndGame = IWnDGame(_wndGame);
+    randomizer = IRandomizer(_rand);
   }
 
   function setTreasureChestId(uint256 typeId) external onlyOwner {
     treasureChestTypeId = typeId;
-  }
-
-  function setRandomer(address addr) external onlyOwner {
-    randomer = IRandomer(addr);
   }
 
   function getStats() external view returns (Stats memory) {
@@ -214,7 +211,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
       owed = (lastClaimTimestamp - stake.value) * DAILY_GP_RATE / 1 days; // stop earning additional $GP if it's all been earned
     }
     if (unstake) {
-      if (random(tokenId) & 1 == 1) { // 50% chance of all $GP stolen
+      if (randomizer.random() & 1 == 1) { // 50% chance of all $GP stolen
         _payDragonTax(owed);
         owed = 0;
       }
@@ -394,20 +391,6 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
       return flight[i][seed % flight[i].length].owner;
     }
     return address(0x0);
-  }
-
-  /**
-   * generates a pseudorandom number
-   * @param seed a value ensure different outcomes for different sources in the same block
-   * @return a pseudorandom value
-   */
-  function random(uint256 seed) internal view returns (uint256) {
-    return uint256(keccak256(abi.encodePacked(
-      tx.origin,
-      blockhash(block.number - 1),
-      block.timestamp,
-      seed
-    )));
   }
 
   function onERC721Received(

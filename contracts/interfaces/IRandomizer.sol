@@ -1,5 +1,5 @@
 pragma solidity ^0.8.0;
 
-interface IRandomer {
+interface IRandomizer {
     function random() external returns (uint256);
 }
