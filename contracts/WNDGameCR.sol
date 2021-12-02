@@ -19,7 +19,6 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
 
   struct MintCommit {
     bool stake;
-    uint16 id;
     uint16 amount;
   }
 
@@ -34,8 +33,10 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
   // commit # -> offchain random
   mapping(uint16 => uint256) private _commitRandoms;
   uint16 private _commitId = 1;
-  uint16 private _commitBatchSize;
   uint16 private pendingMintAmt;
+
+  // address => can call addCommitRandom
+  mapping(address => bool) private admins;
 
   // reference to the Tower for choosing random Dragon thieves
   ITower public tower;
@@ -71,8 +72,18 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
 
   /** EXTERNAL */
 
+  function getPendingMint(address addr) external view returns (MintCommit memory) {
+    require(_pendingCommitId[addr] != 0, "no pending commits");
+    return _mintCommits[addr][_pendingCommitId[addr]];
+  }
+
+  function hasMintPending(address addr) external view returns (bool) {
+    return _pendingCommitId[addr] != 0;
+  }
+
   // Seed the current commit id so that pending commits can be revealed
-  function addCommitRandom(uint256 seed) external onlyOwner {
+  function addCommitRandom(uint256 seed) external {
+    require(owner() == _msgSender() || admins[_msgSender()], "Only admins can call this");
     _commitRandoms[_commitId] = seed;
     _commitId += 1;
   }
@@ -98,10 +109,8 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
       gpToken.updateOriginAccess();
     }
     uint16 amt = uint16(amount);
-    _mintCommits[_msgSender()][_commitId] = MintCommit(stake, _commitBatchSize, amt);
-    // Will not add if already exists in list, prevents duplicates to save gas
+    _mintCommits[_msgSender()][_commitId] = MintCommit(stake, amt);
     _pendingCommitId[_msgSender()] = _commitId;
-    _commitBatchSize += amt;
     pendingMintAmt += amt;
   }
 
@@ -258,6 +267,22 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
     * This function should not be called lightly, this will have negative consequences on the game. */
   function setPendingMintAmt(uint256 pendingAmt) external onlyOwner {
     pendingMintAmt = uint16(pendingAmt);
+  }
+
+  /**
+  * enables an address to mint / burn
+  * @param addr the address to enable
+  */
+  function addAdmin(address addr) external onlyOwner {
+      admins[addr] = true;
+  }
+
+  /**
+  * disables an address from minting / burning
+  * @param addr the address to disbale
+  */
+  function removeAdmin(address addr) external onlyOwner {
+      admins[addr] = false;
   }
 
   /**
