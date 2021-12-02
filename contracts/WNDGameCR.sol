@@ -120,7 +120,7 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
     for (uint k = 0; k < commit.amount; k++) {
       minted++;
       // scramble the random so the steal / treasure mechanic are different per mint
-      seed = uint256(keccak256(abi.encode(seed, gasleft(), tx.origin)));
+      seed = uint256(keccak256(abi.encode(seed, tx.origin)));
       address recipient = selectRecipient(seed, minted, paidTokens);
       if(recipient != _msgSender() && alter.balanceOf(_msgSender(), treasureChestTypeId) > 0) {
         // If the mint is going to be stolen, there's a 50% chance 
