@@ -38,7 +38,7 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
   IWnDGame public wndGame;
   // reference to the $GP contract for minting $GP earnings
   IGP public gpToken;
-  // reference to Randomizer 
+  // reference to Randomer 
   IRandomizer public randomizer;
 
   // maps tokenId to stake
@@ -176,6 +176,26 @@ contract Tower is ITower, Ownable, ReentrancyGuard, IERC721Receiver, Pausable {
       return;
     }
     gpToken.mint(_msgSender(), owed);
+  }
+
+  function calculateRewards(uint256 tokenId) external view returns (uint256 owed) {
+    uint64 lastTokenWrite = wndNFT.getTokenWriteBlock(tokenId);
+    // Must check this, as getTokenTraits will be allowed since this contract is an admin
+    require(lastTokenWrite < block.number, "hmmmm what doing?");
+    Stake memory stake = tower[tokenId];
+    if(wndNFT.isWizard(tokenId)) {
+      if (totalGPEarned < MAXIMUM_GLOBAL_GP) {
+        owed = (block.timestamp - stake.value) * DAILY_GP_RATE / 1 days;
+      } else if (stake.value > lastClaimTimestamp) {
+        owed = 0; // $GP production stopped already
+      } else {
+        owed = (lastClaimTimestamp - stake.value) * DAILY_GP_RATE / 1 days; // stop earning additional $GP if it's all been earned
+      }
+    }
+    else {
+      uint8 rank = _rankForDragon(tokenId);
+      owed = (rank) * (gpPerRank - stake.value); // Calculate portion of tokens based on Rank
+    }
   }
 
   /**

@@ -102,7 +102,7 @@ contract SacrificialAlter is ISacrificialAlter, ERC1155, Ownable, Pausable {
     function updateOriginAccess() external override {
         require(admins[_msgSender()], "Only admins can call this");
         lastWrite[tx.origin].blockNum = uint64(block.number);
-        lastWrite[tx.origin].time = uint64(block.number);
+        lastWrite[tx.origin].time = uint64(block.timestamp);
     }
 
     /**

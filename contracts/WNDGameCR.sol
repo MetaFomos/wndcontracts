@@ -3,7 +3,7 @@
 pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/token/ERC721/extensions/ERC721Enumerable.sol";
+import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./interfaces/IWnDGame.sol";
 import "./interfaces/ITower.sol";
@@ -14,37 +14,28 @@ import "./interfaces/ISacrificialAlter.sol";
 import "./interfaces/IRandomizer.sol";
 
 
-contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
+contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
+  using EnumerableSet for EnumerableSet.UintSet; 
 
-  IRandomizer public randomizer; 
-
-  struct LastWrite {
-    uint64 time;
-    uint64 blockNum;
+  struct MintCommit {
+    bool stake;
+    uint16 id;
+    uint16 amount;
   }
 
-  struct Whitelist {
-    bool isWhitelisted;
-    uint16 numMinted;
-  }
-
-  mapping(address => LastWrite) private _lastWrite;
-
-  bool public hasPublicSaleStarted;
-  uint256 public presalePrice = 0.088 ether;
   uint256 public treasureChestTypeId;
-
-  uint256 private maxPrice = 0.42069 ether;
-  // uint256 private maxPrice = 0.0001 ether;
-  uint256 private minPrice = 0.088 ether;
-  // uint256 private minPrice = 0.0001 ether;
-  uint256 private priceDecrementAmt = 0.01 ether;
-  uint256 private timeToDecrementPrice = 10 minutes;
-  uint256 private startedTime;
   // max $GP cost 
   uint256 private maxGpCost = 72000 ether;
 
-  mapping(address => Whitelist) private _whitelistAddresses;
+  // address -> commit # -> commits
+  mapping(address => mapping(uint16 => MintCommit)) private _mintCommits;
+  // address -> commit num of commit need revealed for account
+  mapping(address => uint16) private _pendingCommitId;
+  // commit # -> vrf random
+  mapping(uint16 => uint256) private _commitRandoms;
+  uint16 private _commitId = 1;
+  uint16 private _commitBatchSize;
+  uint16 private pendingMintAmt;
 
   // reference to the Tower for choosing random Dragon thieves
   ITower public tower;
@@ -57,9 +48,6 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
   // reference to alter collection
   ISacrificialAlter public alter;
 
-  /** 
-   * instantiates contract and rarity tables
-   */
   constructor() {
     _pause();
   }
@@ -69,58 +57,70 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
   modifier requireContractsSet() {
       require(address(gpToken) != address(0) && address(traits) != address(0) 
         && address(wndNFT) != address(0) && address(tower) != address(0) && address(alter) != address(0)
-         && address(randomizer) != address(0)
         , "Contracts not set");
       _;
   }
 
-  function setContracts(address _gp, address _traits, address _wnd, address _tower, address _alter, address _rand) external onlyOwner {
+  function setContracts(address _gp, address _traits, address _wnd, address _tower, address _alter) external onlyOwner {
     gpToken = IGP(_gp);
     traits = ITraits(_traits);
     wndNFT = IWnD(_wnd);
     tower = ITower(_tower);
     alter = ISacrificialAlter(_alter);
-    randomizer = IRandomizer(_rand);
   }
 
-  function setTreasureChestId(uint256 typeId) external onlyOwner {
-    treasureChestTypeId = typeId;
-  }
   /** EXTERNAL */
 
-  /** 
-   * mint a token - 90% Wizard, 10% Dragons
-   * The first 25% are claimed with eth, the remaining cost $GP
-   */
-  function mint(uint256 amount, bool stake) external payable whenNotPaused nonReentrant {
+  // Seed the current commit id so that pending commits can be revealed
+  function addCommitRandom(uint256 seed) external onlyOwner {
+    _commitRandoms[_commitId] = seed;
+    _commitId += 1;
+  }
+
+  /** Initiate the start of a mint. This action burns $GP, as the intent of committing is that you cannot back out once you've started.
+    * This will add users into the pending queue, to be revealed after a random seed is generated and assigned to the commit id this
+    * commit was added to. */
+  function mintCommit(uint256 amount, bool stake) external whenNotPaused nonReentrant {
     require(tx.origin == _msgSender(), "Only EOA");
+    require(_pendingCommitId[_msgSender()] == 0, "Already have pending mints");
     uint16 minted = wndNFT.minted();
     uint256 maxTokens = wndNFT.getMaxTokens();
-    uint256 paidTokens = wndNFT.getPaidTokens();
-    require(minted + amount <= maxTokens, "All tokens minted");
+    require(minted + pendingMintAmt + amount <= maxTokens, "All tokens minted");
     require(amount > 0 && amount <= 10, "Invalid mint amount");
-    if (minted < paidTokens) {
-      require(minted + amount <= paidTokens, "All tokens on-sale already sold");
-      if(hasPublicSaleStarted) {
-        require(msg.value >= amount * currentPriceToMint(), "Invalid payment amount");
-      }
-      else {
-        require(amount * presalePrice == msg.value, "Invalid payment amount");
-        require(_whitelistAddresses[_msgSender()].isWhitelisted, "Not on whitelist");
-        require(_whitelistAddresses[_msgSender()].numMinted + amount <= 2, "too many mints");
-        _whitelistAddresses[_msgSender()].numMinted += uint16(amount);
-      }
-    } else {
-      require(msg.value == 0);
-    }
-    LastWrite storage lw = _lastWrite[tx.origin];
 
     uint256 totalGpCost = 0;
-    uint16[] memory tokenIds = new uint16[](amount);
-    uint256 seed = 0;
-    for (uint i = 0; i < amount; i++) {
+    // Loop through the amount of 
+    for (uint i = 1; i <= amount; i++) {
+      totalGpCost += mintCost(minted + pendingMintAmt + i, maxTokens);
+    }
+    if (totalGpCost > 0) {
+      gpToken.burn(_msgSender(), totalGpCost);
+      gpToken.updateOriginAccess();
+    }
+    uint16 amt = uint16(amount);
+    _mintCommits[_msgSender()][_commitId] = MintCommit(stake, _commitBatchSize, amt);
+    // Will not add if already exists in list, prevents duplicates to save gas
+    _pendingCommitId[_msgSender()] = _commitId;
+    _commitBatchSize += amt;
+    pendingMintAmt += amt;
+  }
+
+  /** Reveal the commits for this user. This will be when the user gets their NFT, and can only be done when the commit id that
+    * the user is pending for has been assigned a random seed. */
+  function mintReveal() external whenNotPaused nonReentrant {
+    require(tx.origin == _msgSender(), "Only EOA1");
+    uint16 commitIdCur = _pendingCommitId[_msgSender()];
+    require(_commitRandoms[commitIdCur] > 0, "random seed not set");
+    uint16 minted = wndNFT.minted();
+    uint16 paidTokens = 15000;
+    MintCommit memory commit = _mintCommits[_msgSender()][commitIdCur];
+    pendingMintAmt -= commit.amount;
+    uint16[] memory tokenIds = new uint16[](commit.amount);
+    uint256 seed = _commitRandoms[commitIdCur];
+    for (uint k = 0; k < commit.amount; k++) {
       minted++;
-      seed = randomizer.random();
+      // scramble the random so the steal / treasure mechanic are different per mint
+      seed = uint256(keccak256(abi.encode(seed, gasleft(), tx.origin)));
       address recipient = selectRecipient(seed, minted, paidTokens);
       if(recipient != _msgSender() && alter.balanceOf(_msgSender(), treasureChestTypeId) > 0) {
         // If the mint is going to be stolen, there's a 50% chance 
@@ -130,68 +130,39 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
           recipient = _msgSender();
         }
       }
-      tokenIds[i] = minted;
-      if (!stake || recipient != _msgSender()) {
+      tokenIds[k] = minted;
+      if (!commit.stake || recipient != _msgSender()) {
         wndNFT.mint(recipient, seed);
       } else {
         wndNFT.mint(address(tower), seed);
       }
-      totalGpCost += mintCost(minted, maxTokens, paidTokens);
     }
     wndNFT.updateOriginAccess(tokenIds);
-    if (totalGpCost > 0) {
-      gpToken.burn(_msgSender(), totalGpCost);
-      gpToken.updateOriginAccess();
-    }
-    if (stake) {
+    if (commit.stake) {
       tower.addManyToTowerAndFlight(_msgSender(), tokenIds);
     }
-    lw.time = uint64(block.timestamp);
-    lw.blockNum = uint64(block.number);
-  }
-
-  function currentPriceToMint() view public returns(uint256) {
-    uint256 numDecrements = (block.timestamp - startedTime) / timeToDecrementPrice;
-    uint256 decrementAmt = (priceDecrementAmt * numDecrements);
-    if(decrementAmt > maxPrice) {
-      return minPrice;
-    }
-    uint256 adjPrice = maxPrice - decrementAmt;
-    return adjPrice;
-  }
-
-  function addToWhitelist(address[] calldata addressesToAdd) public onlyOwner {
-    for (uint256 i = 0; i < addressesToAdd.length; i++) {
-      _whitelistAddresses[addressesToAdd[i]] = Whitelist(true, 0);
-    }
-  }
-
-  function setPublicSaleStart(bool started) external onlyOwner {
-    hasPublicSaleStarted = started;
-    if(hasPublicSaleStarted) {
-      startedTime = block.timestamp;
-    }
+    delete _mintCommits[_msgSender()][commitIdCur];
+    delete _pendingCommitId[_msgSender()];
   }
 
   /** 
    * @param tokenId the ID to check the cost of to mint
    * @return the cost of the given token ID
    */
-  function mintCost(uint256 tokenId, uint256 maxTokens, uint256 paidTokens) public view returns (uint256) {
-    if (tokenId <= paidTokens) return 0;
+  function mintCost(uint256 tokenId, uint256 maxTokens) public view returns (uint256) {
     if (tokenId <= maxTokens * 8 / 20) return 24000 ether;
     if (tokenId <= maxTokens * 11 / 20) return 36000 ether;
     if (tokenId <= maxTokens * 14 / 20) return 48000 ether;
     if (tokenId <= maxTokens * 17 / 20) return 60000 ether; 
-    if (tokenId > maxTokens * 17 / 20) return maxGpCost;
+    // if (tokenId > maxTokens * 17 / 20)
+    return maxGpCost;
   }
 
   function payTribute(uint256 gpAmt) external whenNotPaused nonReentrant {
     require(tx.origin == _msgSender(), "Only EOA");
     uint16 minted = wndNFT.minted();
     uint256 maxTokens = wndNFT.getMaxTokens();
-    uint256 paidTokens = wndNFT.getPaidTokens();
-    uint256 gpMintCost = mintCost(minted, maxTokens, paidTokens);
+    uint256 gpMintCost = mintCost(minted, maxTokens);
     require(gpMintCost > 0, "Sacrificial alter currently closed");
     require(gpAmt >= gpMintCost, "Not enough gp given");
     gpToken.burn(_msgSender(), gpAmt);
@@ -228,8 +199,7 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
     IWnD.WizardDragon memory nft = wndNFT.getTokenTraits(tokenId);
     uint16 minted = wndNFT.minted();
     uint256 maxTokens = wndNFT.getMaxTokens();
-    uint256 paidTokens = wndNFT.getPaidTokens();
-    uint256 gpMintCost = mintCost(minted, maxTokens, paidTokens);
+    uint256 gpMintCost = mintCost(minted, maxTokens);
     require(gpMintCost > 0, "Sacrificial alter currently closed");
     if(nft.isWizard) {
       // Wizard sacrifice requires 3x $GP curve
@@ -277,6 +247,18 @@ contract WnDGame is IWnDGame, Ownable, ReentrancyGuard, Pausable {
   function setMaxGpCost(uint256 _amount) external requireContractsSet onlyOwner {
     maxGpCost = _amount;
   } 
+
+  function setTreasureChestId(uint256 typeId) external onlyOwner {
+    treasureChestTypeId = typeId;
+  }
+
+  /** Allow the contract owner to set the pending mint amount.
+    * This allows any long-standing pending commits to be overwritten, say for instance if the max supply has been 
+    *  reached but there are many stale pending commits, it could be used to free up those spaces if needed/desired by the community.
+    * This function should not be called lightly, this will have negative consequences on the game. */
+  function setPendingMintAmt(uint256 pendingAmt) external onlyOwner {
+    pendingMintAmt = uint16(pendingAmt);
+  }
 
   /**
    * allows owner to withdraw funds from minting
