@@ -31,7 +31,7 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
   mapping(address => mapping(uint16 => MintCommit)) private _mintCommits;
   // address -> commit num of commit need revealed for account
   mapping(address => uint16) private _pendingCommitId;
-  // commit # -> vrf random
+  // commit # -> offchain random
   mapping(uint16 => uint256) private _commitRandoms;
   uint16 private _commitId = 1;
   uint16 private _commitBatchSize;
