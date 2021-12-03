@@ -3,7 +3,6 @@
 pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/security/Pausable.sol";
-import "@openzeppelin/contracts/utils/structs/EnumerableSet.sol";
 import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "./interfaces/IWnDGame.sol";
 import "./interfaces/ITower.sol";
@@ -15,7 +14,9 @@ import "./interfaces/IRandomizer.sol";
 
 
 contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
-  using EnumerableSet for EnumerableSet.UintSet; 
+
+  event MintCommitted(address indexed owner, uint256 indexed amount);
+  event MintRevealed(address indexed owner, uint256 indexed amount);
 
   struct MintCommit {
     bool stake;
@@ -81,11 +82,28 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
     return _pendingCommitId[addr] != 0;
   }
 
+  function canMint(address addr) external view returns (bool) {
+    return _pendingCommitId[addr] != 0 && _commitRandoms[_pendingCommitId[addr]] > 0;
+  }
+
   // Seed the current commit id so that pending commits can be revealed
   function addCommitRandom(uint256 seed) external {
     require(owner() == _msgSender() || admins[_msgSender()], "Only admins can call this");
     _commitRandoms[_commitId] = seed;
     _commitId += 1;
+  }
+
+  function deleteCommit(address addr) external {
+    require(owner() == _msgSender() || admins[_msgSender()], "Only admins can call this");
+    uint16 commitIdCur = _pendingCommitId[_msgSender()];
+    require(commitIdCur > 0, "No pending commit");
+    delete _mintCommits[addr][commitIdCur];
+    delete _pendingCommitId[addr];
+  }
+
+  function forceRevealCommit(address addr) external {
+    require(owner() == _msgSender() || admins[_msgSender()], "Only admins can call this");
+    reveal(addr);
   }
 
   /** Initiate the start of a mint. This action burns $GP, as the intent of committing is that you cannot back out once you've started.
@@ -112,46 +130,52 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
     _mintCommits[_msgSender()][_commitId] = MintCommit(stake, amt);
     _pendingCommitId[_msgSender()] = _commitId;
     pendingMintAmt += amt;
+    emit MintCommitted(_msgSender(), amount);
   }
 
   /** Reveal the commits for this user. This will be when the user gets their NFT, and can only be done when the commit id that
     * the user is pending for has been assigned a random seed. */
   function mintReveal() external whenNotPaused nonReentrant {
     require(tx.origin == _msgSender(), "Only EOA1");
-    uint16 commitIdCur = _pendingCommitId[_msgSender()];
+    reveal(_msgSender());
+  }
+
+  function reveal(address addr) internal {
+    uint16 commitIdCur = _pendingCommitId[addr];
+    require(commitIdCur > 0, "No pending commit");
     require(_commitRandoms[commitIdCur] > 0, "random seed not set");
     uint16 minted = wndNFT.minted();
-    uint16 paidTokens = 15000;
-    MintCommit memory commit = _mintCommits[_msgSender()][commitIdCur];
+    MintCommit memory commit = _mintCommits[addr][commitIdCur];
     pendingMintAmt -= commit.amount;
     uint16[] memory tokenIds = new uint16[](commit.amount);
     uint256 seed = _commitRandoms[commitIdCur];
     for (uint k = 0; k < commit.amount; k++) {
       minted++;
       // scramble the random so the steal / treasure mechanic are different per mint
-      seed = uint256(keccak256(abi.encode(seed, tx.origin)));
-      address recipient = selectRecipient(seed, minted, paidTokens);
-      if(recipient != _msgSender() && alter.balanceOf(_msgSender(), treasureChestTypeId) > 0) {
+      seed = uint256(keccak256(abi.encode(seed, addr)));
+      address recipient = selectRecipient(seed);
+      if(recipient != addr && alter.balanceOf(addr, treasureChestTypeId) > 0) {
         // If the mint is going to be stolen, there's a 50% chance 
         //  a dragon will prefer a treasure chest over it
         if(seed & 1 == 1) {
-          alter.safeTransferFrom(_msgSender(), recipient, treasureChestTypeId, 1, "");
-          recipient = _msgSender();
+          alter.safeTransferFrom(addr, recipient, treasureChestTypeId, 1, "");
+          recipient = addr;
         }
       }
       tokenIds[k] = minted;
-      if (!commit.stake || recipient != _msgSender()) {
+      if (!commit.stake || recipient != addr) {
         wndNFT.mint(recipient, seed);
       } else {
         wndNFT.mint(address(tower), seed);
       }
     }
     wndNFT.updateOriginAccess(tokenIds);
-    if (commit.stake) {
-      tower.addManyToTowerAndFlight(_msgSender(), tokenIds);
+    if(commit.stake) {
+      tower.addManyToTowerAndFlight(addr, tokenIds);
     }
-    delete _mintCommits[_msgSender()][commitIdCur];
-    delete _pendingCommitId[_msgSender()];
+    delete _mintCommits[addr][commitIdCur];
+    delete _pendingCommitId[addr];
+    emit MintCommitted(addr, tokenIds.length);
   }
 
   /** 
@@ -236,8 +260,8 @@ contract WnDGameCR is IWnDGame, Ownable, ReentrancyGuard, Pausable {
    * @param seed a random value to select a recipient from
    * @return the address of the recipient (either the minter or the Dragon thief's owner)
    */
-  function selectRecipient(uint256 seed, uint256 minted, uint256 paidTokens) internal view returns (address) {
-    if (minted <= paidTokens || ((seed >> 245) % 10) != 0) return _msgSender(); // top 10 bits haven't been used
+  function selectRecipient(uint256 seed) internal view returns (address) {
+    if (((seed >> 245) % 10) != 0) return _msgSender(); // top 10 bits haven't been used
     address thief = tower.randomDragonOwner(seed >> 144); // 144 bits reserved for trait selection
     if (thief == address(0x0)) return _msgSender();
     return thief;
